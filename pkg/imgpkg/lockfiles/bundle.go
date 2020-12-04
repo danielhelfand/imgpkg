@@ -1,7 +1,7 @@
 // Copyright 2020 VMware, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package cmd
+package lockfiles
 
 import (
 	"archive/tar"
@@ -22,7 +22,7 @@ type Bundle struct {
 	Image regv1.Image
 }
 
-func isBundle(img regv1.Image) (bool, error) {
+func IsBundle(img regv1.Image) (bool, error) {
 	cfg, err := img.ConfigFile()
 	if err != nil {
 		return false, err

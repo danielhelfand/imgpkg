@@ -14,6 +14,7 @@ import (
 	regv1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/k14s/imgpkg/pkg/imgpkg/image"
 	ctlimg "github.com/k14s/imgpkg/pkg/imgpkg/image"
+	lf "github.com/k14s/imgpkg/pkg/imgpkg/lockfiles"
 	"gopkg.in/yaml.v2"
 
 	"github.com/spf13/cobra"
@@ -188,13 +189,13 @@ func (o *CopyOptions) GetUnprocessedImageURLs() (*UnprocessedImageURLs, string, 
 	}
 	switch {
 	case o.LockInputFlags.LockFilePath != "":
-		lock, err := ReadLockFile(o.LockInputFlags.LockFilePath)
+		lock, err := lf.ReadLockFile(o.LockInputFlags.LockFilePath)
 		if err != nil {
 			return nil, "", err
 		}
 		switch {
-		case lock.Kind == BundleLockKind:
-			bundleLock, err := ReadBundleLockFile(o.LockInputFlags.LockFilePath)
+		case lock.Kind == lf.BundleLockKind:
+			bundleLock, err := lf.ReadBundleLockFile(o.LockInputFlags.LockFilePath)
 			if err != nil {
 				return nil, "", err
 			}
@@ -209,16 +210,16 @@ func (o *CopyOptions) GetUnprocessedImageURLs() (*UnprocessedImageURLs, string, 
 				return nil, "", err
 			}
 
-			images, err := GetReferencedImages(parsedRef, o.RegistryFlags.AsRegistryOpts())
+			images, err := lf.GetReferencedImages(parsedRef, o.RegistryFlags.AsRegistryOpts())
 			if err != nil {
 				return nil, "", err
 			}
 
-			bundle := Bundle{bundleRef, bundleLock.Spec.Image.OriginalTag, img}
+			bundle := lf.Bundle{bundleRef, bundleLock.Spec.Image.OriginalTag, img}
 			collectURLs(images, &bundle, unprocessedImageURLs)
 
-		case lock.Kind == ImagesLockKind:
-			imgLock, err := ReadImageLockFile(o.LockInputFlags.LockFilePath)
+		case lock.Kind == lf.ImagesLockKind:
+			imgLock, err := lf.ReadImageLockFile(o.LockInputFlags.LockFilePath)
 			if err != nil {
 				return nil, "", err
 			}
@@ -228,13 +229,8 @@ func (o *CopyOptions) GetUnprocessedImageURLs() (*UnprocessedImageURLs, string, 
 				return nil, "", fmt.Errorf("Checking image lock for bundles: %s", err)
 			}
 
-			var bundleStrings []string
-			for _, bundle := range bundles {
-				bundleStrings = append(bundleStrings, bundle.URL)
-			}
-
 			if len(bundles) != 0 {
-				return nil, "", fmt.Errorf("Expected image lock to not contain bundle reference: '%v'", strings.Join(bundleStrings, "', '"))
+				return nil, "", fmt.Errorf("Expected image lock to not contain bundle reference: '%v'", strings.Join(bundles, "', '"))
 			}
 
 			collectURLs(imgLock.Spec.Images, nil, unprocessedImageURLs)
@@ -272,12 +268,12 @@ func (o *CopyOptions) GetUnprocessedImageURLs() (*UnprocessedImageURLs, string, 
 			return nil, "", err
 		}
 
-		images, err := GetReferencedImages(refWithDigest, o.RegistryFlags.AsRegistryOpts())
+		images, err := lf.GetReferencedImages(refWithDigest, o.RegistryFlags.AsRegistryOpts())
 		if err != nil {
 			return nil, "", err
 		}
 
-		bundle := Bundle{bundleRef, bundleTag, img}
+		bundle := lf.Bundle{bundleRef, bundleTag, img}
 		collectURLs(images, &bundle, unprocessedImageURLs)
 	}
 
@@ -324,7 +320,7 @@ func getTag(parsedRef regname.Reference) string {
 
 // Determine whether an image is a Bundle or is not a Bundle
 func checkIfBundle(img regv1.Image, expectsBundle bool, errMsg error) error {
-	isBundle, err := isBundle(img)
+	isBundle, err := lf.IsBundle(img)
 	if err != nil {
 		return err
 	}
@@ -341,7 +337,7 @@ func checkIfBundle(img regv1.Image, expectsBundle bool, errMsg error) error {
 
 // And images and bundle reference to unprocessedImageURLs.
 // Exclude passing Bundle reference by passing nil.
-func collectURLs(images []ImageDesc, bundle *Bundle, unprocessedImageURLs *UnprocessedImageURLs) {
+func collectURLs(images []lf.ImageDesc, bundle *lf.Bundle, unprocessedImageURLs *UnprocessedImageURLs) {
 	for _, img := range images {
 		unprocessedImageURLs.Add(UnprocessedImageURL{URL: img.Image})
 	}
@@ -356,11 +352,11 @@ func (o *CopyOptions) writeLockOutput(processedImages *ProcessedImages, bundleUR
 
 	switch bundleURL {
 	case "":
-		iLock := ImageLock{ApiVersion: ImagesLockAPIVersion, Kind: ImagesLockKind}
+		iLock := lf.ImageLock{ApiVersion: lf.ImagesLockAPIVersion, Kind: lf.ImagesLockKind}
 		for _, img := range processedImages.All() {
 			iLock.Spec.Images = append(
 				iLock.Spec.Images,
-				ImageDesc{
+				lf.ImageDesc{
 					Image: img.Image.URL,
 				},
 			)
@@ -383,10 +379,10 @@ func (o *CopyOptions) writeLockOutput(processedImages *ProcessedImages, bundleUR
 			return fmt.Errorf("could not find process item for url '%s'", bundleURL)
 		}
 
-		bLock := BundleLock{
-			ApiVersion: BundleLockAPIVersion,
-			Kind:       BundleLockKind,
-			Spec:       BundleSpec{Image: ImageLocation{DigestRef: url, OriginalTag: originalTag}},
+		bLock := lf.BundleLock{
+			ApiVersion: lf.BundleLockAPIVersion,
+			Kind:       lf.BundleLockKind,
+			Spec:       lf.BundleSpec{Image: lf.ImageLocation{DigestRef: url, OriginalTag: originalTag}},
 		}
 		outBytes, err = yaml.Marshal(bLock)
 		if err != nil {

@@ -1,13 +1,12 @@
 // Copyright 2020 VMware, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-package cmd_test
+package lockfiles
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/k14s/imgpkg/pkg/imgpkg/cmd"
 	"gopkg.in/yaml.v2"
 )
 
@@ -18,7 +17,7 @@ spec:
   images:
   - image: nginx:v1`)
 
-	var imageLock cmd.ImageLock
+	var imageLock ImageLock
 	err := yaml.Unmarshal(imageLockYaml, &imageLock)
 
 	if err == nil {
