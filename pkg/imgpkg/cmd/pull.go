@@ -86,7 +86,7 @@ func (o *PullOptions) Run() error {
 	img := imgs[0]
 	isBundle, err := isBundle(img)
 	if err != nil {
-		return fmt.Errorf("checking if image is bunlde: %v", err)
+		return fmt.Errorf("checking if image is bundle: %v", err)
 	}
 
 	if o.ImageFlags.Image != "" {

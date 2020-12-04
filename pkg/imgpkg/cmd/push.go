@@ -244,8 +244,14 @@ func (o *PushOptions) validateBundle(registry ctlimg.Registry) error {
 	if err != nil {
 		return fmt.Errorf("Checking image lock for bundles: %s", err)
 	}
+
+	var bundleStrings []string
+	for _, bundle := range bundles {
+		bundleStrings = append(bundleStrings, bundle.URL)
+	}
+
 	if len(bundles) != 0 {
-		return fmt.Errorf("Expected image lock to not contain bundle reference: '%v'", strings.Join(bundles, "', '"))
+		return fmt.Errorf("Expected image lock to not contain bundle reference: '%v'", strings.Join(bundleStrings, "', '"))
 	}
 	return nil
 }

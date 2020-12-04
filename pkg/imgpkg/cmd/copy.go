@@ -11,6 +11,7 @@ import (
 
 	"github.com/cppforlife/go-cli-ui/ui"
 	regname "github.com/google/go-containerregistry/pkg/name"
+	regv1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/k14s/imgpkg/pkg/imgpkg/image"
 	ctlimg "github.com/k14s/imgpkg/pkg/imgpkg/image"
 	"gopkg.in/yaml.v2"
@@ -70,7 +71,7 @@ func (o *CopyOptions) Run() error {
 	}
 
 	if o.isTarSrc() && o.isTarDst() {
-		return fmt.Errorf("Cannot use tar src with tar dst")
+		return fmt.Errorf("Cannot use tar source (--from-tar) with tar destination (--to-tar)")
 	}
 
 	logger := ctlimg.NewLogger(os.Stderr)
@@ -186,37 +187,26 @@ func (o *CopyOptions) GetUnprocessedImageURLs() (*UnprocessedImageURLs, string, 
 		return nil, "", fmt.Errorf("Unable to create a registry with the options %v: %v", o.RegistryFlags.AsRegistryOpts(), err)
 	}
 	switch {
-
 	case o.LockInputFlags.LockFilePath != "":
 		lock, err := ReadLockFile(o.LockInputFlags.LockFilePath)
 		if err != nil {
 			return nil, "", err
 		}
 		switch {
-		case lock.Kind == "BundleLock":
+		case lock.Kind == BundleLockKind:
 			bundleLock, err := ReadBundleLockFile(o.LockInputFlags.LockFilePath)
 			if err != nil {
 				return nil, "", err
 			}
 
 			bundleRef = bundleLock.Spec.Image.DigestRef
-			parsedRef, err := regname.ParseReference(bundleRef)
+			parsedRef, img, err := getRefAndImage(bundleRef, &reg)
 			if err != nil {
 				return nil, "", err
 			}
 
-			img, err := reg.Image(parsedRef)
-			if err != nil {
+			if err := checkIfBundle(img, true, fmt.Errorf("Expected image flag when given an image reference. Please run with -i instead of -b, or use -b with a bundle reference")); err != nil {
 				return nil, "", err
-			}
-
-			isBundle, err := isBundle(img)
-			if err != nil {
-				return nil, "", err
-			}
-
-			if !isBundle {
-				return nil, "", fmt.Errorf("Expected image flag when given an image reference. Please run with -i instead of -b, or use -b with a bundle reference")
 			}
 
 			images, err := GetReferencedImages(parsedRef, o.RegistryFlags.AsRegistryOpts())
@@ -224,12 +214,10 @@ func (o *CopyOptions) GetUnprocessedImageURLs() (*UnprocessedImageURLs, string, 
 				return nil, "", err
 			}
 
-			for _, image := range images {
-				unprocessedImageURLs.Add(UnprocessedImageURL{URL: image.Image})
-			}
-			unprocessedImageURLs.Add(UnprocessedImageURL{URL: bundleRef, Tag: bundleLock.Spec.Image.OriginalTag})
+			bundle := Bundle{bundleRef, bundleLock.Spec.Image.OriginalTag, img}
+			collectURLs(images, &bundle, unprocessedImageURLs)
 
-		case lock.Kind == "ImagesLock":
+		case lock.Kind == ImagesLockKind:
 			imgLock, err := ReadImageLockFile(o.LockInputFlags.LockFilePath)
 			if err != nil {
 				return nil, "", err
@@ -239,115 +227,136 @@ func (o *CopyOptions) GetUnprocessedImageURLs() (*UnprocessedImageURLs, string, 
 			if err != nil {
 				return nil, "", fmt.Errorf("Checking image lock for bundles: %s", err)
 			}
-			if len(bundles) != 0 {
-				return nil, "", fmt.Errorf("Expected image lock to not contain bundle reference: '%v'", strings.Join(bundles, "', '"))
+
+			var bundleStrings []string
+			for _, bundle := range bundles {
+				bundleStrings = append(bundleStrings, bundle.URL)
 			}
 
-			for _, img := range imgLock.Spec.Images {
-				unprocessedImageURLs.Add(UnprocessedImageURL{URL: img.Image})
+			if len(bundles) != 0 {
+				return nil, "", fmt.Errorf("Expected image lock to not contain bundle reference: '%v'", strings.Join(bundleStrings, "', '"))
 			}
+
+			collectURLs(imgLock.Spec.Images, nil, unprocessedImageURLs)
 		default:
-			return nil, "", fmt.Errorf("Unexpected lock kind, expected bundleLock or imageLock, got: %v", lock.Kind)
+			return nil, "", fmt.Errorf("Unexpected lock kind. Expected BundleLock or ImagesLock, got: %v", lock.Kind)
 		}
 
 	case o.ImageFlags.Image != "":
-		parsedRef, err := regname.ParseReference(o.ImageFlags.Image)
+		parsedRef, img, err := getRefAndImage(o.ImageFlags.Image, &reg)
 		if err != nil {
 			return nil, "", err
 		}
 
-		var imageTag string
-		if t, ok := parsedRef.(regname.Tag); ok {
-			imageTag = t.TagStr()
-		}
-
-		img, err := reg.Image(parsedRef)
-		if err != nil {
+		if err := checkIfBundle(img, false, fmt.Errorf("Expected bundle flag when copying a bundle, please use -b instead of -i")); err != nil {
 			return nil, "", err
 		}
 
-		digest, err := img.Digest()
-		if err != nil {
-			return nil, "", err
-		}
-
-		parsedRef, err = regname.NewDigest(fmt.Sprintf("%s@%s", parsedRef.Context().Name(), digest))
-		if err != nil {
-			return nil, "", err
-		}
-
-		isBundle, err := isBundle(img)
-		if err != nil {
-			return nil, "", err
-		}
-
-		if isBundle {
-			return nil, "", fmt.Errorf("Expected bundle flag when copying a bundle, please use -b instead of -i")
-		}
-
+		imageTag := getTag(parsedRef)
 		unprocessedImageURLs.Add(UnprocessedImageURL{o.ImageFlags.Image, imageTag})
 
 	default:
 		bundleRef = o.BundleFlags.Bundle
-
-		parsedRef, err := regname.ParseReference(bundleRef)
+		parsedRef, img, err := getRefAndImage(bundleRef, &reg)
 		if err != nil {
 			return nil, "", err
 		}
 
-		var bundleTag string
-		if t, ok := parsedRef.(regname.Tag); ok {
-			bundleTag = t.TagStr()
-		}
-
-		img, err := reg.Image(parsedRef)
+		bundleTag := getTag(parsedRef)
+		refWithDigest, err := getRefWithDigest(parsedRef, img)
 		if err != nil {
 			return nil, "", err
 		}
 
-		digest, err := img.Digest()
+		if err := checkIfBundle(img, true, fmt.Errorf("Expected image flag when given an image reference. Please run with -i instead of -b, or use -b with a bundle reference")); err != nil {
+			return nil, "", err
+		}
+
+		images, err := GetReferencedImages(refWithDigest, o.RegistryFlags.AsRegistryOpts())
 		if err != nil {
 			return nil, "", err
 		}
 
-		bundleRef = fmt.Sprintf("%s@%s", parsedRef.Context().Name(), digest)
-		parsedRef, err = regname.NewDigest(bundleRef)
-		if err != nil {
-			return nil, "", err
-		}
-
-		isBundle, err := isBundle(img)
-		if err != nil {
-			return nil, "", err
-		}
-
-		if !isBundle {
-			return nil, "", fmt.Errorf("Expected image flag when given an image reference. Please run with -i instead of -b, or use -b with a bundle reference")
-		}
-
-		images, err := GetReferencedImages(parsedRef, o.RegistryFlags.AsRegistryOpts())
-		if err != nil {
-			return nil, "", err
-		}
-
-		for _, img := range images {
-			unprocessedImageURLs.Add(UnprocessedImageURL{URL: img.Image})
-		}
-
-		unprocessedImageURLs.Add(UnprocessedImageURL{URL: bundleRef, Tag: bundleTag})
+		bundle := Bundle{bundleRef, bundleTag, img}
+		collectURLs(images, &bundle, unprocessedImageURLs)
 	}
 
 	return unprocessedImageURLs, bundleRef, nil
 }
 
-func (o *CopyOptions) writeLockOutput(processedImages *ProcessedImages, bundleURL string) error {
+// Get the parsed image reference and associated image struct from a registry
+func getRefAndImage(ref string, reg *image.Registry) (regname.Reference, regv1.Image, error) {
+	parsedRef, err := regname.ParseReference(ref)
+	if err != nil {
+		return nil, nil, err
+	}
 
+	img, err := reg.Image(parsedRef)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return parsedRef, img, err
+}
+
+// Get image reference with digest
+func getRefWithDigest(parsedRef regname.Reference, img regv1.Image) (regname.Reference, error) {
+	digest, err := img.Digest()
+	if err != nil {
+		return nil, err
+	}
+	refWithDigest, err := regname.NewDigest(fmt.Sprintf("%s@%s", parsedRef.Context().Name(), digest))
+	if err != nil {
+		return nil, err
+	}
+	return refWithDigest, err
+}
+
+// Get the tag from an image reference. Returns empty string
+// if no tag found.
+func getTag(parsedRef regname.Reference) string {
+	var tag string
+	if t, ok := parsedRef.(regname.Tag); ok {
+		tag = t.TagStr()
+	}
+	return tag
+}
+
+// Determine whether an image is a Bundle or is not a Bundle
+func checkIfBundle(img regv1.Image, expectsBundle bool, errMsg error) error {
+	isBundle, err := isBundle(img)
+	if err != nil {
+		return err
+	}
+	// bundleCheck lets function caller determine whether to err
+	// on if img is a Bundle or is not
+	if isBundle != expectsBundle {
+		// errMsg is custom err message if isBundle != expectsBundle
+		// that caller can specify
+		return errMsg
+	}
+
+	return nil
+}
+
+// And images and bundle reference to unprocessedImageURLs.
+// Exclude passing Bundle reference by passing nil.
+func collectURLs(images []ImageDesc, bundle *Bundle, unprocessedImageURLs *UnprocessedImageURLs) {
+	for _, img := range images {
+		unprocessedImageURLs.Add(UnprocessedImageURL{URL: img.Image})
+	}
+	if bundle != nil {
+		unprocessedImageURLs.Add(UnprocessedImageURL{URL: bundle.URL, Tag: bundle.Tag})
+	}
+}
+
+func (o *CopyOptions) writeLockOutput(processedImages *ProcessedImages, bundleURL string) error {
 	var outBytes []byte
 	var err error
 
 	switch bundleURL {
 	case "":
-		iLock := ImageLock{ApiVersion: ImageLockAPIVersion, Kind: ImageLockKind}
+		iLock := ImageLock{ApiVersion: ImagesLockAPIVersion, Kind: ImagesLockKind}
 		for _, img := range processedImages.All() {
 			iLock.Spec.Images = append(
 				iLock.Spec.Images,

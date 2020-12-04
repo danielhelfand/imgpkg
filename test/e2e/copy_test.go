@@ -71,7 +71,7 @@ spec:
 		t.Fatalf("failed to read bundlelock file: %v", err)
 	}
 	bundleDigest := fmt.Sprintf("@%s", extractDigest(bundleLockYml.Spec.Image.DigestRef, t))
-	bundleTag := fmt.Sprintf("%s", bundleLockYml.Spec.Image.OriginalTag)
+	bundleTag := bundleLockYml.Spec.Image.OriginalTag
 
 	lockOutputPath := filepath.Join(os.TempDir(), "bundle-lock-relocate-lock.yml")
 	defer os.Remove(lockOutputPath)
@@ -907,12 +907,12 @@ func validateBundleLockApiVersionAndKind(bLock cmd.BundleLock) error {
 }
 
 func validateImageLockApiVersionAndKind(iLock cmd.ImageLock) error {
-	if iLock.ApiVersion != cmd.ImageLockAPIVersion {
-		return fmt.Errorf("expected apiVersion to equal: %s, but got: %s", cmd.ImageLockAPIVersion, iLock.ApiVersion)
+	if iLock.ApiVersion != cmd.ImagesLockAPIVersion {
+		return fmt.Errorf("expected apiVersion to equal: %s, but got: %s", cmd.ImagesLockAPIVersion, iLock.ApiVersion)
 	}
 
-	if iLock.Kind != cmd.ImageLockKind {
-		return fmt.Errorf("expected Kind to equal: %s, but got: %s", cmd.ImageLockKind, iLock.Kind)
+	if iLock.Kind != cmd.ImagesLockKind {
+		return fmt.Errorf("expected Kind to equal: %s, but got: %s", cmd.ImagesLockKind, iLock.Kind)
 	}
 	return nil
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/ioutil"
 
-	regname "github.com/google/go-containerregistry/pkg/name"
 	ctlimg "github.com/k14s/imgpkg/pkg/imgpkg/image"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -15,10 +14,10 @@ import (
 )
 
 const (
-	ImageLockKind  string = "ImageLock"
+	ImagesLockKind string = "ImagesLock"
 	BundleLockKind string = "BundleLock"
 
-	ImageLockAPIVersion  string = "imgpkg.carvel.dev/v1alpha1"
+	ImagesLockAPIVersion string = "imgpkg.carvel.dev/v1alpha1"
 	BundleLockAPIVersion string = "imgpkg.carvel.dev/v1alpha1"
 )
 
@@ -109,15 +108,17 @@ func readPathInto(path string, obj interface{}) error {
 	return yaml.Unmarshal(bs, obj)
 }
 
-func (il *ImageLock) CheckForBundles(reg ctlimg.Registry) ([]string, error) {
-	var bundles []string
+func (il *ImageLock) CheckForBundles(reg ctlimg.Registry) ([]Bundle, error) {
+	var bundles []Bundle
 	for _, img := range il.Spec.Images {
 		imgRef := img.Image
-		parsedRef, err := regname.ParseReference(imgRef)
+		
+		_, image, err := getRefAndImage(imgRef, &reg)
 		if err != nil {
 			return nil, err
 		}
-		image, err := reg.Image(parsedRef)
+
+		bundle := Bundle{imgRef, "", image}
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +129,7 @@ func (il *ImageLock) CheckForBundles(reg ctlimg.Registry) ([]string, error) {
 		}
 
 		if isBundle {
-			bundles = append(bundles, imgRef)
+			bundles = append(bundles, bundle)
 		}
 	}
 	return bundles, nil
